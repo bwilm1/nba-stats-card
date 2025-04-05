@@ -21,9 +21,14 @@ def index():
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             card.save(filepath)
             return render_template('index.html', filename=filename)
+        except ValueError as e:
+            if "Player not found" in str(e):
+                return render_template('index.html', error=f"Player '{player_name}' not found. Please check the spelling.")
+            app.logger.error(f'Error generating card: {str(e)}')
+            return render_template('index.html', error=str(e))
         except Exception as e:
             app.logger.error(f'Error generating card: {str(e)}')
-            return f"Error: {str(e)}", 500
+            return render_template('index.html', error="An unexpected error occurred")
     return render_template('index.html')
 
 @app.route('/cards/<filename>')
