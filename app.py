@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, send_from_directory
 import os
 from nba_card_generator import NBAStatsCard
+from requests.exceptions import Timeout
 
 app = Flask(__name__)
 
@@ -21,6 +22,10 @@ def index():
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             card.save(filepath)
             return render_template('index.html', filename=filename)
+        except Timeout:
+            error_msg = "The NBA API is currently unavailable. Please try again later."
+            app.logger.error(f'NBA API timeout for player: {player_name}')
+            return render_template('index.html', error=error_msg)
         except ValueError as e:
             if "Player not found" in str(e):
                 return render_template('index.html', error=f"Player '{player_name}' not found. Please check the spelling.")

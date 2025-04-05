@@ -21,14 +21,31 @@ class NBAStatsCard:
         }
         
     def get_player_info(self, player_name):
-        """Get basic player information."""
-        player_dict = players.find_players_by_full_name(player_name)
-        if not player_dict:
-            raise ValueError(f"Player {player_name} not found")
+        """Get basic player information with retry logic."""
+        max_retries = 3
+        base_delay = 1  # seconds
         
-        player_id = player_dict[0]['id']
-        player_info = commonplayerinfo.CommonPlayerInfo(player_id=player_id).get_normalized_dict()
-        return player_info['CommonPlayerInfo'][0]
+        for attempt in range(max_retries):
+            try:
+                player_dict = players.find_players_by_full_name(player_name)
+                if not player_dict:
+                    raise ValueError(f"Player {player_name} not found")
+                
+                player_id = player_dict[0]['id']
+                player_info = commonplayerinfo.CommonPlayerInfo(
+                    player_id=player_id,
+                    timeout=60
+                ).get_normalized_dict()
+                return player_info['CommonPlayerInfo'][0]
+                
+            except Timeout:
+                if attempt == max_retries - 1:
+                    raise Exception("NBA API timed out after multiple attempts. Please try again later.")
+                time.sleep(base_delay * (2 ** attempt))
+                continue
+                
+            except Exception as e:
+                raise Exception(f"Error fetching player info: {str(e)}")
 
     def get_player_stats(self, player_id):
         """Get current season stats for player with retry logic."""
