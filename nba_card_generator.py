@@ -7,8 +7,10 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import requests
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 from requests.exceptions import Timeout
+import os
+import json
 
 class NBAStatsCard:
     def __init__(self):
@@ -19,11 +21,39 @@ class NBAStatsCard:
             'gradient_neutral': '#808080',
             'gradient_excellent': '#4B9EFF'
         }
+        self.cache_file = 'league_stats_cache.json'
+        self.cache_duration = timedelta(hours=24)
         
+    def _load_cached_stats(self):
+        """Load cached league stats if they exist and are not expired."""
+        if not os.path.exists(self.cache_file):
+            return None
+            
+        try:
+            with open(self.cache_file, 'r') as f:
+                cache = json.load(f)
+                
+            cache_time = datetime.fromisoformat(cache['timestamp'])
+            if datetime.now() - cache_time > self.cache_duration:
+                return None
+                
+            return cache['stats']
+        except:
+            return None
+            
+    def _save_cached_stats(self, stats):
+        """Save league stats to cache."""
+        cache = {
+            'timestamp': datetime.now().isoformat(),
+            'stats': stats
+        }
+        with open(self.cache_file, 'w') as f:
+            json.dump(cache, f)
+
     def get_player_info(self, player_name):
         """Get basic player information with retry logic."""
-        max_retries = 3
-        base_delay = 1  # seconds
+        max_retries = 5
+        base_delay = 2
         
         for attempt in range(max_retries):
             try:
@@ -32,16 +62,21 @@ class NBAStatsCard:
                     raise ValueError(f"Player {player_name} not found")
                 
                 player_id = player_dict[0]['id']
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
                 player_info = commonplayerinfo.CommonPlayerInfo(
                     player_id=player_id,
-                    timeout=60
+                    timeout=30,
+                    headers=headers
                 ).get_normalized_dict()
                 return player_info['CommonPlayerInfo'][0]
                 
             except Timeout:
                 if attempt == max_retries - 1:
                     raise Exception("NBA API timed out after multiple attempts. Please try again later.")
-                time.sleep(base_delay * (2 ** attempt))
+                wait_time = base_delay * (2 ** attempt)
+                time.sleep(wait_time)
                 continue
                 
             except Exception as e:
@@ -49,32 +84,43 @@ class NBAStatsCard:
 
     def get_player_stats(self, player_id):
         """Get current season stats for player with retry logic."""
+        # Try to load from cache first
+        cached_stats = self._load_cached_stats()
+        if cached_stats:
+            player_stats = next((player for player in cached_stats if player['PLAYER_ID'] == player_id), None)
+            if player_stats:
+                return player_stats, cached_stats
+        
+        # If not in cache or cache expired, fetch from API
         max_retries = 3
-        base_delay = 1  # seconds
+        base_delay = 1
         
         for attempt in range(max_retries):
             try:
                 league_stats = leaguedashplayerstats.LeagueDashPlayerStats(
                     season='2023-24',
                     per_mode_detailed='PerGame',
-                    timeout=60
+                    timeout=30,
+                    headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
                 ).get_normalized_dict()
                 
-                player_stats = None
-                for player in league_stats['LeagueDashPlayerStats']:
-                    if player['PLAYER_ID'] == player_id:
-                        player_stats = player
-                        break
-                        
+                stats_list = league_stats['LeagueDashPlayerStats']
+                player_stats = next((player for player in stats_list if player['PLAYER_ID'] == player_id), None)
+                
                 if not player_stats:
                     raise ValueError(f"Could not find stats for player ID {player_id}")
-                    
-                return player_stats, league_stats['LeagueDashPlayerStats']
+                
+                # Cache the results
+                self._save_cached_stats(stats_list)
+                return player_stats, stats_list
                 
             except Timeout:
                 if attempt == max_retries - 1:
                     raise Exception("NBA API timed out after multiple attempts. Please try again later.")
-                time.sleep(base_delay * (2 ** attempt))  # Exponential backoff
+                wait_time = base_delay * (2 ** attempt)
+                time.sleep(wait_time)
                 continue
                 
             except Exception as e:
