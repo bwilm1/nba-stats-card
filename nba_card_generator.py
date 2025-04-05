@@ -1,3 +1,4 @@
+import time
 from nba_api.stats.static import players
 from nba_api.stats.endpoints import commonplayerinfo, playergamelog, leaguedashplayerstats
 import pandas as pd
@@ -7,6 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 import requests
 from io import BytesIO
 from datetime import datetime
+from requests.exceptions import Timeout
 
 class NBAStatsCard:
     def __init__(self):
@@ -29,19 +31,37 @@ class NBAStatsCard:
         return player_info['CommonPlayerInfo'][0]
 
     def get_player_stats(self, player_id):
-        """Get current season stats for player."""
-        league_stats = leaguedashplayerstats.LeagueDashPlayerStats(
-            season='2023-24',
-            per_mode_detailed='PerGame'
-        ).get_normalized_dict()
+        """Get current season stats for player with retry logic."""
+        max_retries = 3
+        base_delay = 1  # seconds
         
-        player_stats = None
-        for player in league_stats['LeagueDashPlayerStats']:
-            if player['PLAYER_ID'] == player_id:
-                player_stats = player
-                break
+        for attempt in range(max_retries):
+            try:
+                league_stats = leaguedashplayerstats.LeagueDashPlayerStats(
+                    season='2023-24',
+                    per_mode_detailed='PerGame',
+                    timeout=60
+                ).get_normalized_dict()
                 
-        return player_stats, league_stats['LeagueDashPlayerStats']
+                player_stats = None
+                for player in league_stats['LeagueDashPlayerStats']:
+                    if player['PLAYER_ID'] == player_id:
+                        player_stats = player
+                        break
+                        
+                if not player_stats:
+                    raise ValueError(f"Could not find stats for player ID {player_id}")
+                    
+                return player_stats, league_stats['LeagueDashPlayerStats']
+                
+            except Timeout:
+                if attempt == max_retries - 1:
+                    raise Exception("NBA API timed out after multiple attempts. Please try again later.")
+                time.sleep(base_delay * (2 ** attempt))  # Exponential backoff
+                continue
+                
+            except Exception as e:
+                raise Exception(f"Error fetching player stats: {str(e)}")
 
     def calculate_percentile(self, value, stat_list):
         """Calculate percentile rank for a given stat."""
