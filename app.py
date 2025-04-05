@@ -3,11 +3,12 @@ import os
 from nba_card_generator import NBAStatsCard
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'cards'
 
 # Ensure cards directory exists
-if not os.path.exists(app.config['UPLOAD_FOLDER']):
-    os.makedirs(app.config['UPLOAD_FOLDER'])
+cards_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cards')
+if not os.path.exists(cards_dir):
+    os.makedirs(cards_dir)
+app.config['UPLOAD_FOLDER'] = cards_dir
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -19,9 +20,10 @@ def index():
             filename = f"{player_name.replace(' ', '_').lower()}_stats_card.png"
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             card.save(filepath)
-            return render_template('index.html', card_generated=True, filename=filename)
+            return render_template('index.html', filename=filename)
         except Exception as e:
-            return render_template('index.html', error=str(e))
+            app.logger.error(f'Error generating card: {str(e)}')
+            return f"Error: {str(e)}", 500
     return render_template('index.html')
 
 @app.route('/cards/<filename>')
