@@ -32,10 +32,59 @@ class NBAStatsCard:
             'Referer': 'https://stats.nba.com/',
             'Connection': 'keep-alive',
         }
+        self.cache_dir = 'cache'
+        self.cache_duration = timedelta(hours=24)
+        
+        # Create cache directory if it doesn't exist
+        if not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir)
+            
+    def _get_cache_path(self, player_name):
+        """Get the cache file path for a player."""
+        return os.path.join(self.cache_dir, f"{player_name.lower().replace(' ', '_')}_cache.json")
+        
+    def _load_from_cache(self, player_name):
+        """Load player stats from cache if available and not expired."""
+        cache_path = self._get_cache_path(player_name)
+        if not os.path.exists(cache_path):
+            return None
+            
+        try:
+            with open(cache_path, 'r') as f:
+                cache_data = json.load(f)
+                
+            cache_time = datetime.fromisoformat(cache_data['timestamp'])
+            if datetime.now() - cache_time > self.cache_duration:
+                return None
+                
+            return cache_data['stats']
+        except:
+            return None
+            
+    def _save_to_cache(self, player_name, stats):
+        """Save player stats to cache."""
+        cache_path = self._get_cache_path(player_name)
+        cache_data = {
+            'timestamp': datetime.now().isoformat(),
+            'stats': stats
+        }
+        
+        try:
+            with open(cache_path, 'w') as f:
+                json.dump(cache_data, f)
+        except:
+            pass  # Ignore cache write errors
         
     def get_player_stats(self, player_name):
-        """Get player stats from NBA.com API with retry logic"""
+        """Get player stats from NBA.com API with retry logic and caching"""
         print(f"[DEBUG] Starting NBA stats lookup for {player_name}")
+        
+        # Try to load from cache first
+        cached_stats = self._load_from_cache(player_name)
+        if cached_stats:
+            print("[DEBUG] Using cached stats")
+            return cached_stats, []  # Return empty list for league stats since we don't cache those
+            
         max_retries = 3
         base_delay = 2
         
@@ -49,20 +98,34 @@ class NBAStatsCard:
                 player_id = player_dict[0]['id']
                 print(f"[DEBUG] Found player ID: {player_id}")
                 
-                # Get player info
-                player_info = commonplayerinfo.CommonPlayerInfo(
-                    player_id=player_id,
-                    timeout=30,
-                    headers=self.headers
-                ).get_normalized_dict()
+                # Get player info with increased timeout and retry
+                try:
+                    player_info = commonplayerinfo.CommonPlayerInfo(
+                        player_id=player_id,
+                        timeout=30,  # Reduced timeout to prevent Gunicorn worker timeout
+                        headers=self.headers
+                    ).get_normalized_dict()
+                except Timeout:
+                    print(f"[DEBUG] Player info request timed out. Attempt {attempt + 1}/{max_retries}")
+                    if attempt == max_retries - 1:
+                        raise
+                    time.sleep(base_delay * (2 ** attempt))
+                    continue
                 
-                # Get player stats
-                player_stats = leaguedashplayerstats.LeagueDashPlayerStats(
-                    season='2023-24',
-                    headers=self.headers,
-                    timeout=30,
-                    per_mode_detailed='PerGame'
-                ).get_normalized_dict()
+                # Get league stats with increased timeout and retry
+                try:
+                    player_stats = leaguedashplayerstats.LeagueDashPlayerStats(
+                        season='2023-24',
+                        headers=self.headers,
+                        timeout=30,  # Reduced timeout to prevent Gunicorn worker timeout
+                        per_mode_detailed='PerGame'
+                    ).get_normalized_dict()
+                except Timeout:
+                    print(f"[DEBUG] League stats request timed out. Attempt {attempt + 1}/{max_retries}")
+                    if attempt == max_retries - 1:
+                        raise
+                    time.sleep(base_delay * (2 ** attempt))
+                    continue
                 
                 # Find player's stats in league stats
                 stats_list = player_stats['LeagueDashPlayerStats']
@@ -92,6 +155,9 @@ class NBAStatsCard:
                     'TRB/G': player_current_stats['REB'] / player_current_stats['GP']
                 }
                 
+                # Save to cache
+                self._save_to_cache(player_name, stats)
+                
                 print("[DEBUG] Successfully retrieved player stats")
                 return stats, stats_list
                 
@@ -99,7 +165,7 @@ class NBAStatsCard:
                 wait_time = base_delay * (2 ** attempt)
                 print(f"[DEBUG] Timeout occurred. Attempt {attempt + 1}/{max_retries}. Waiting {wait_time} seconds...")
                 if attempt == max_retries - 1:
-                    raise Exception("NBA API timed out after multiple attempts")
+                    raise Exception("NBA API timed out after multiple attempts. Please try again later.")
                 time.sleep(wait_time)
                 continue
                 

@@ -2,8 +2,13 @@ from flask import Flask, render_template, request, send_from_directory
 import os
 from nba_card_generator import NBAStatsCard
 from requests.exceptions import Timeout
+import logging
 
 app = Flask(__name__)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Ensure cards directory exists
 cards_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cards')
@@ -23,15 +28,17 @@ def index():
             card.save(filepath)
             return render_template('index.html', filename=filename, card_generated=True)
         except Timeout:
-            error_msg = "Basketball-Reference is currently unavailable. Please try again later."
-            app.logger.error(f'Basketball-Reference timeout for player: {player_name}')
+            error_msg = "The NBA API is currently experiencing high latency. Please try again in a few minutes."
+            logger.error(f'NBA API timeout for player: {player_name}')
             return render_template('index.html', error=error_msg)
         except ValueError as e:
             if "Player not found" in str(e):
                 return render_template('index.html', error=f"Player '{player_name}' not found. Please check the spelling.")
             return render_template('index.html', error=str(e))
         except Exception as e:
-            app.logger.error(f'Error generating card for {player_name}: {str(e)}')
+            logger.error(f'Error generating card for {player_name}: {str(e)}')
+            if "timed out" in str(e).lower():
+                return render_template('index.html', error="The request timed out. Please try again in a few minutes.")
             return render_template('index.html', error="An unexpected error occurred. Please try again.")
     return render_template('index.html')
 
