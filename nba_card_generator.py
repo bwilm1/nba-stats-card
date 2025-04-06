@@ -1,6 +1,4 @@
 import time
-from nba_api.stats.static import players
-from nba_api.stats.endpoints import commonplayerinfo, playergamelog, leaguedashplayerstats
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,6 +9,9 @@ from datetime import datetime, timedelta
 from requests.exceptions import Timeout
 import os
 import json
+from nba_api.stats.static import players
+from nba_api.stats.endpoints import commonplayerinfo, playergamelog, leaguedashplayerstats
+from nba_api.stats.library.parameters import SeasonAll
 
 class NBAStatsCard:
     def __init__(self):
@@ -21,110 +22,90 @@ class NBAStatsCard:
             'gradient_neutral': '#808080',
             'gradient_excellent': '#4B9EFF'
         }
-        self.cache_file = 'league_stats_cache.json'
-        self.cache_duration = timedelta(hours=24)
-        
-    def _load_cached_stats(self):
-        """Load cached league stats if they exist and are not expired."""
-        if not os.path.exists(self.cache_file):
-            return None
-            
-        try:
-            with open(self.cache_file, 'r') as f:
-                cache = json.load(f)
-                
-            cache_time = datetime.fromisoformat(cache['timestamp'])
-            if datetime.now() - cache_time > self.cache_duration:
-                return None
-                
-            return cache['stats']
-        except:
-            return None
-            
-    def _save_cached_stats(self, stats):
-        """Save league stats to cache."""
-        cache = {
-            'timestamp': datetime.now().isoformat(),
-            'stats': stats
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'x-nba-stats-origin': 'stats',
+            'x-nba-stats-token': 'true',
+            'Referer': 'https://stats.nba.com/',
+            'Connection': 'keep-alive',
         }
-        with open(self.cache_file, 'w') as f:
-            json.dump(cache, f)
-
-    def get_player_info(self, player_name):
-        """Get basic player information with retry logic."""
-        max_retries = 5
+        
+    def get_player_stats(self, player_name):
+        """Get player stats from NBA.com API with retry logic"""
+        print(f"[DEBUG] Starting NBA stats lookup for {player_name}")
+        max_retries = 3
         base_delay = 2
         
         for attempt in range(max_retries):
             try:
+                # Find player ID
                 player_dict = players.find_players_by_full_name(player_name)
                 if not player_dict:
                     raise ValueError(f"Player {player_name} not found")
                 
                 player_id = player_dict[0]['id']
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                }
+                print(f"[DEBUG] Found player ID: {player_id}")
+                
+                # Get player info
                 player_info = commonplayerinfo.CommonPlayerInfo(
                     player_id=player_id,
                     timeout=30,
-                    headers=headers
+                    headers=self.headers
                 ).get_normalized_dict()
-                return player_info['CommonPlayerInfo'][0]
                 
-            except Timeout:
-                if attempt == max_retries - 1:
-                    raise Exception("NBA API timed out after multiple attempts. Please try again later.")
-                wait_time = base_delay * (2 ** attempt)
-                time.sleep(wait_time)
-                continue
-                
-            except Exception as e:
-                raise Exception(f"Error fetching player info: {str(e)}")
-
-    def get_player_stats(self, player_id):
-        """Get current season stats for player with retry logic."""
-        # Try to load from cache first
-        cached_stats = self._load_cached_stats()
-        if cached_stats:
-            player_stats = next((player for player in cached_stats if player['PLAYER_ID'] == player_id), None)
-            if player_stats:
-                return player_stats, cached_stats
-        
-        # If not in cache or cache expired, fetch from API
-        max_retries = 3
-        base_delay = 1
-        
-        for attempt in range(max_retries):
-            try:
-                league_stats = leaguedashplayerstats.LeagueDashPlayerStats(
+                # Get player stats
+                player_stats = leaguedashplayerstats.LeagueDashPlayerStats(
                     season='2023-24',
-                    per_mode_detailed='PerGame',
+                    headers=self.headers,
                     timeout=30,
-                    headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    }
+                    per_mode_detailed='PerGame'
                 ).get_normalized_dict()
                 
-                stats_list = league_stats['LeagueDashPlayerStats']
-                player_stats = next((player for player in stats_list if player['PLAYER_ID'] == player_id), None)
+                # Find player's stats in league stats
+                stats_list = player_stats['LeagueDashPlayerStats']
+                player_current_stats = next(
+                    (player for player in stats_list if player['PLAYER_ID'] == player_id),
+                    None
+                )
                 
-                if not player_stats:
-                    raise ValueError(f"Could not find stats for player ID {player_id}")
+                if not player_current_stats:
+                    raise ValueError("Could not find current season stats")
                 
-                # Cache the results
-                self._save_cached_stats(stats_list)
-                return player_stats, stats_list
+                # Combine info and stats
+                stats = {
+                    'name': player_info['CommonPlayerInfo'][0]['DISPLAY_FIRST_LAST'],
+                    'team': f"{player_info['CommonPlayerInfo'][0]['TEAM_CITY']} {player_info['CommonPlayerInfo'][0]['TEAM_NAME']}",
+                    'position': player_info['CommonPlayerInfo'][0]['POSITION'],
+                    'G': player_current_stats['GP'],
+                    'PTS': player_current_stats['PTS'],
+                    'TRB': player_current_stats['REB'],
+                    'AST': player_current_stats['AST'],
+                    'FG%': player_current_stats['FG_PCT'],
+                    '3P%': player_current_stats['FG3_PCT'],
+                    'FT%': player_current_stats['FT_PCT'],
+                    'PER': (player_current_stats['PTS'] + player_current_stats['REB'] + player_current_stats['AST']) / player_current_stats['GP'],  # Simple approximation
+                    'TS%': (player_current_stats['PTS'] / (2 * (player_current_stats['FGA'] + 0.44 * player_current_stats['FTA']))) if player_current_stats['FGA'] > 0 else 0,
+                    'AST/G': player_current_stats['AST'] / player_current_stats['GP'],
+                    'TRB/G': player_current_stats['REB'] / player_current_stats['GP']
+                }
+                
+                print("[DEBUG] Successfully retrieved player stats")
+                return stats, stats_list
                 
             except Timeout:
-                if attempt == max_retries - 1:
-                    raise Exception("NBA API timed out after multiple attempts. Please try again later.")
                 wait_time = base_delay * (2 ** attempt)
+                print(f"[DEBUG] Timeout occurred. Attempt {attempt + 1}/{max_retries}. Waiting {wait_time} seconds...")
+                if attempt == max_retries - 1:
+                    raise Exception("NBA API timed out after multiple attempts")
                 time.sleep(wait_time)
                 continue
                 
             except Exception as e:
-                raise Exception(f"Error fetching player stats: {str(e)}")
+                print(f"[ERROR] Failed to fetch stats: {str(e)}")
+                raise
 
     def calculate_percentile(self, value, stat_list):
         """Calculate percentile rank for a given stat."""
@@ -154,9 +135,8 @@ class NBAStatsCard:
 
     def create_stats_card(self, player_name):
         """Generate the stats card for a given player."""
-        # Get player info and stats
-        player_info = self.get_player_info(player_name)
-        player_stats, league_stats = self.get_player_stats(player_info['PERSON_ID'])
+        # Get player stats
+        stats, league_stats = self.get_player_stats(player_name)
         
         # Create image
         width, height = 800, 1000
@@ -174,22 +154,20 @@ class NBAStatsCard:
             stats_font = ImageFont.load_default()
 
         # Draw player name and basic info
-        draw.text((40, 40), f"{player_info['DISPLAY_FIRST_LAST']}", 
-                 fill=self.colors['text'], font=title_font)
-        draw.text((40, 100), 
-                 f"{player_info['TEAM_CITY']} {player_info['TEAM_NAME']} | {player_info['POSITION']}",
+        draw.text((40, 40), stats['name'], fill=self.colors['text'], font=title_font)
+        draw.text((40, 100), f"{stats['team']} | {stats['position']}", 
                  fill=self.colors['text'], font=header_font)
 
         # Draw basic stats
         y_pos = 180
         basic_stats = [
-            f"Games Played: {player_stats['GP']}",
-            f"Points: {player_stats['PTS']:.1f}",
-            f"Rebounds: {player_stats['REB']:.1f}",
-            f"Assists: {player_stats['AST']:.1f}",
-            f"FG%: {player_stats['FG_PCT']:.1%}",
-            f"3P%: {player_stats['FG3_PCT']:.1%}",
-            f"FT%: {player_stats['FT_PCT']:.1%}"
+            f"Games Played: {stats['G']}",
+            f"Points: {stats['PTS']:.1f}",
+            f"Rebounds: {stats['TRB']:.1f}",
+            f"Assists: {stats['AST']:.1f}",
+            f"FG%: {stats['FG%']:.1%}",
+            f"3P%: {stats['3P%']:.1%}",
+            f"FT%: {stats['FT%']:.1%}"
         ]
 
         for stat in basic_stats:
@@ -198,34 +176,36 @@ class NBAStatsCard:
 
         # Draw advanced stats with percentiles
         y_pos += 40
-        draw.text((40, y_pos), "Advanced Stats", fill=self.colors['text'], font=header_font)
+        draw.text((40, y_pos), "Advanced Stats (with League Percentile)", 
+                 fill=self.colors['text'], font=header_font)
         y_pos += 50
 
         # Calculate and display advanced stats percentiles
         advanced_stats = {
-            'PER': [player_stats['PTS'] / player_stats['MIN'] * 36, [p['PTS'] / p['MIN'] * 36 for p in league_stats if p['MIN'] > 0]],  # Using points per 36 as a simple substitute
-            'TS%': [player_stats['FG_PCT'] * 100, [p['FG_PCT'] * 100 for p in league_stats]],  # Using FG% as a simpler substitute
-            'AST': [player_stats['AST'] / player_stats['MIN'] * 36, [p['AST'] / p['MIN'] * 36 for p in league_stats if p['MIN'] > 0]],  # Assists per 36 minutes
-            'REB': [player_stats['REB'] / player_stats['MIN'] * 36, [p['REB'] / p['MIN'] * 36 for p in league_stats if p['MIN'] > 0]]  # Rebounds per 36 minutes
+            'PER': [stats['PER'], [(p['PTS'] + p['REB'] + p['AST']) / p['GP'] for p in league_stats]],
+            'TS%': [stats['TS%'] * 100, [(p['PTS'] / (2 * (p['FGA'] + 0.44 * p['FTA']))) * 100 if p['FGA'] > 0 else 0 for p in league_stats]],
+            'AST/G': [stats['AST/G'], [p['AST'] / p['GP'] for p in league_stats]],
+            'REB/G': [stats['TRB/G'], [p['REB'] / p['GP'] for p in league_stats]]
         }
 
         for stat_name, (stat_value, league_values) in advanced_stats.items():
-            percentile = self.calculate_percentile(stat_value, league_values)
-            color = self.get_gradient_color(percentile)
-            
-            # Draw stat background
-            draw.rectangle([35, y_pos-5, 400, y_pos+35], fill=color)
-            draw.text((40, y_pos), 
-                     f"{stat_name}: {stat_value:.1f} ({percentile}th percentile)", 
-                     fill=self.colors['text'], font=stats_font)
-            y_pos += 50
+            if pd.notna(stat_value):  # Only display if value exists
+                percentile = self.calculate_percentile(stat_value, league_values)
+                color = self.get_gradient_color(percentile)
+                
+                # Draw stat background
+                draw.rectangle([35, y_pos-5, 400, y_pos+35], fill=color)
+                draw.text((40, y_pos), 
+                         f"{stat_name}: {stat_value:.1f} ({percentile}th percentile)", 
+                         fill=self.colors['text'], font=stats_font)
+                y_pos += 50
 
         # Add footer
         draw.text((40, height-60), 
                  f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}",
                  fill=self.colors['text'], font=stats_font)
         draw.text((40, height-30), 
-                 "Data via nba_api",
+                 "Data via NBA.com Stats",
                  fill=self.colors['text'], font=stats_font)
 
         return image

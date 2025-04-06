@@ -23,22 +23,22 @@ def index():
             card.save(filepath)
             return render_template('index.html', filename=filename)
         except Timeout:
-            error_msg = "The NBA API is currently unavailable. Please try again later."
-            app.logger.error(f'NBA API timeout for player: {player_name}')
+            error_msg = "Basketball-Reference is currently unavailable. Please try again later."
+            app.logger.error(f'Basketball-Reference timeout for player: {player_name}')
             return render_template('index.html', error=error_msg)
         except ValueError as e:
             if "Player not found" in str(e):
                 return render_template('index.html', error=f"Player '{player_name}' not found. Please check the spelling.")
-            app.logger.error(f'Error generating card: {str(e)}')
             return render_template('index.html', error=str(e))
         except Exception as e:
-            app.logger.error(f'Error generating card: {str(e)}')
-            return render_template('index.html', error="An unexpected error occurred")
+            app.logger.error(f'Error generating card for {player_name}: {str(e)}')
+            return render_template('index.html', error="An unexpected error occurred. Please try again.")
     return render_template('index.html')
 
 @app.route('/cards/<filename>')
 def serve_card(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
+# This is only used when running locally. On PythonAnywhere, WSGI is configured differently
 if __name__ == '__main__':
     app.run(debug=True)

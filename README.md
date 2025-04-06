@@ -8,7 +8,7 @@ A Python script that generates visually appealing NBA player stats cards inspire
 - Current season statistics
 - Advanced metrics with percentile rankings
 - Visual gradient indicators (red to blue) for performance
-- Automated data fetching from NBA API
+- Automated data fetching from Basketball-Reference
 
 ## Requirements
 
@@ -38,7 +38,7 @@ The script generates a PNG image file named `nba_stats_card.png` containing the 
 
 ## Data Sources
 
-All data is fetched from the official NBA API via the `nba_api` package.
+All data is fetched from Basketball-Reference, a comprehensive basketball statistics website.
 
 ## Note
 
