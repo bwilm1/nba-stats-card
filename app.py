@@ -21,7 +21,7 @@ def index():
             filename = f"{player_name.replace(' ', '_').lower()}_stats_card.png"
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             card.save(filepath)
-            return render_template('index.html', filename=filename)
+            return render_template('index.html', filename=filename, card_generated=True)
         except Timeout:
             error_msg = "Basketball-Reference is currently unavailable. Please try again later."
             app.logger.error(f'Basketball-Reference timeout for player: {player_name}')
@@ -39,6 +39,7 @@ def index():
 def serve_card(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-# This is only used when running locally. On PythonAnywhere, WSGI is configured differently
+# This is only used when running locally. On production, WSGI is configured differently
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
